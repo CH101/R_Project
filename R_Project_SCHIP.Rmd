@@ -1,0 +1,456 @@
+#R_Project_SCHIP
+For the past 25 years, public policy regarding health insurance in the United States has focused on increasing the rate of coverage among children and youth. These policies appear to have been successful as rates of insurance coverage have increased substantially for these groups. 
+This report studies the efficancy of the State Children’s Health Insurance Program (SCHIP). SCHIP was introduced in 1997. It provided federal matching funds for states to expand coverage of public insurance programs up to age 19, and to children in families with incomes beyond previous Medicaid (state and federal program targeted at low income citizens that helps with medical costs) eligibility levels. States could either expand their existing Medicaid programs or create new programs. States launched their SCHIP programs at different times, but all did so within a fairly narrow window. Most began enrolling children in 1998 and by the end of 1999 all SCHIP programs were up and running (Judith Wooldridge et al. 2003). 
+The overall goal in this report is to provide estimates of take-up and crowd-out of private insurance, by using the discontinuity in SCHIP eligibility upon turning age 19 that was generated when the program was instituted in the late 1990s. 
+
+
+Activate Packages that are necessary to analyse the data set.
+```{r, message=FALSE}
+rm(list = ls())
+library(data.table)
+library(ggplot2)
+library(stargazer)
+library(sandwich)
+library(lmtest)
+library(plm)
+library(Formula)
+library(doBy)
+library(mfx)
+```
+
+
+##Exploratory data analysis
+a) Load the data and explore the data set.
+```{r}
+load("data_insurance.RData")
+dt.insurance <- data.table(data_insurance)
+rm(data_insurance)
+
+stargazer(dt.insurance, type = "text", 
+          nobs = FALSE, mean.sd = TRUE, median = TRUE, iqr = TRUE, no.space = TRUE,  omit.summary.stat = c("p25","p75"))
+head(dt.insurance)
+```
+Looking at the stargazer output we can see, that the data is collected in a range of 17 years, from 1991 to 2008. The observed people were between 16 and 22 years old, while the average age of the sample 18.75 years is. We have almost equally the same number of female and male people in the data set. While 20.7 percent of the people have successfully graduated from highschool, this number droppes significantly to 3.4% of people who have graduated from college. Due to the young age of the observed people, the number of people who have children or who are married are very low. 
+Another interesting attribute of the dataset is, that apparently some families have a negative income. the family income ranges from -19,998 dollar to 1,125,395 dollar, with an average of 59,713 dollar. A negative family income seems illogical on the first view, but it could mean that these families spend more money as they earn. 
+
+Furthermore, it is interesting to see that some peope with a low income, have actually a very high family income who might support them financially. As we can see in the table below, the maximum family income of people with a low income is 133,580 dollar, whereas the minimum family income of people without a low income is -5,000 dollar.
+```{r, eval=FALSE}
+dt.insurance[order(-low_income, -family_income)][1:3]
+dt.insurance[order(low_income, family_income)][1:3]
+```
+
+b) Create a variable that identifies individuals that are below age of 19, and another variable that distinguiches between the before and after period (Until 1999)
+
+In the following we create two new variables.
+Under19 is a dummy variable that divides the data set in people who are 18 or younger, and people who are 19 or older. 
+Implement is a dummy variable as well, that helps us to control for the two time periods <2000 and >=2000. 
+```{r}
+dt.insurance[, under19:= ifelse(age<=19, 1,0)]
+dt.insurance[, implement:= ifelse(year >= 2000, 1, 0)]
+```
+
+c) Characterize the different varibales and their distributions.
+In the following table, we can see that in both age groups the vast majority has an insurance. However, the uninsurance rate in the younger age range is with 29.36% nearly twice as high as within the age group above 18.
+The boxplot shows us the in the period before the implementation of SCHIP, the povratio of the two age groups is very similar, whereas in the period after the povratio of the under19 years old increases slightly. An increase of povratio describes a lower poverty. One factor that describes the increase could be the implementation of the SCHIP program.
+```{r}
+dt.tmp <- data.table(dt.insurance[order(under19, insured), .N , by = list(under19, insured)])
+dt.tmp <- dt.tmp[, prop := N / sum(N), by = under19]
+dt.tmp
+
+qplot(factor(implement), povratio, fill=factor(under19) , data=dt.insurance, geom="boxplot", main = "Poverty ratio among the age groups before and after the SCHIP program") + labs(x='Before 2000 and after',y='Poverty ratio')
+```
+
+d) Choose a plot that summarizes the story of the SCHIP program and justify your choice of plot.
+```{r}
+qplot( data = dt.insurance[, list( mean_insured = mean(insured)) , by = list(year,under19)]
+, y = mean_insured
+, x = year
+, ylab = "Average of Insurance"
+, xlab = "Year"
+, main="Insurance rate per year by different age groups"
+, col = factor(under19)) +
+geom_line() +
+theme_bw() +
+theme(title = element_text(size=9)
+, text = element_text(size=9)
+) +
+ geom_vline( xintercept = 2000 , col = 'Blue', linetype = 2) +
+scale_colour_discrete(name = "Insured"
+, breaks=c(0, 1)
+, labels=c("Age > 19 (non elegible for SHIP)", "Age < 19 (elegible for SCHIP)"))
+```
+The plot above shows the insurance rate per year for people younger than 19 and those who are older. By comparing the the two lines we can examine the effect of the SCHIP program to the different age groups. But we have to be careful in our interpretations, since there might be other factors who influence the insurence rate by age group.
+We can see in the graph, that the two lines are very similar until the implementation period of 1997 to 1999. From 200 onwards we can see a clear increase in insurance rates for people under 19, who are elegible for the SCHIP program. 
+
+##Question 1)
+a) Estimate the impacts of the increased age limits on insurance take-up using a single-differences linear model - select the period after the police increment, and use a linear regression to compare the insured variable for individuals that were below 19 years old with those that were not. 
+
+```{r, warning=FALSE}
+lm1 <- lm(insured ~ under19, data = dt.insurance, subset = implement == 1)
+stargazer(lm1, type = "text", no.space = TRUE, column.sep.width = "1pt", omit.stat = c("f", "ser"))
+```
+
+b) Interpret the regression coefficients and comment on what you find. 
+The constant shows us the number of insured people that are 19 or older in the period after 1999. With a 1% significance level we can conlucde, that on average 70.6% of this group is insured. 
+Beta1 is the difference between the two age groups under 19 years or older. Again on a 1% significance level, 85,7% of the people who are below 19 are on average insured. 
+Hence, we can see that, for people who can potencially have SCHIP, the  number of people insured is increasing, in the period after 1999.
+```{r}
+coefficients(lm1)[1] + coefficients(lm1)[2]
+```
+
+c) Can you accept this as the causal effect of SCHIP on insurance enrollment? Why so or why not? Be statistically formal in your explanation.
+No we can not accept it as causal effect, since we are breaking two OLS assumptions:
+SLR.2: We have not a random sample, because we are looking on a subsample (period after 1999) of our data set.
+SLR.4: In our model lm1 we have a selection bias. We might missing variables that are correlated with our variable under19. If we do so, we violate OLS assumtion 4 and we have an omitted variable bias. An example for an omitted variable that is correlated with under19 could be a new tax law during this period, that effects the taxation of different age groups. 
+
+
+##Question 3
+a)Run a single-differences model that measures the change in yearly insurance rates before and after the policy. 
+```{r, warning=FALSE}
+lm2 <- lm(insured ~ implement, data = dt.insurance)
+stargazer(lm2, type = "text", no.space = TRUE, column.sep.width = "1pt", omit.stat = c("f", "ser"))
+```
+
+b) What do you find and what conclusions does this regression help you (or not) draw?
+Constant: On a 1% significance level, before the implementation of the program the insurance rate was on average 75,6%, ceteris paribus.
+Beta1: On a 1% significance level, after the implementation of the program the insurance rate was on average 2.8% higher than before, ceteris paribus. 
+As we can see from the outcome of our simple linear regression model, the insurance rate of the sample that we have choosen was on average 2,8% higher in the later time period, where the SCHIP program was implemented. The SCHIP program could be one effect of this increase in insurance rate, but we can not accept it as the causal effect as explained in question 2.
+
+
+##Question 4)
+a) Create a table with the means of the variable insured before and after the policy, for the individuals accected by the policy and for the individuals that were not affected. Use this table to calculate the difference-in-differences estimator. 
+```{r}
+DD.table <- data.table(dt.insurance[,list(mean_insured = mean(insured)), by=list(implement, under19)])
+DD.table
+```
+
+The difference-in-differences estimator can be calculated in two different ways:
+$$ (Treated_{After} - Treated_{Before}) - (Control_{After} - Control_{Before}) $$
+or:
+$$ (Treated_{After} - Control_{After}) - (Treated_{Before} - Control_{Before}) $$
+```{r}
+# (TAfter-TBefore) - (CAfter-CBefore)
+DD1 <- (DD.table[1,3]-DD.table[2,3]) - (DD.table[3,3] - DD.table[4,3])
+# (TAfter-CAfter) - (TBefore-CBefore)
+DD2 <- (DD.table[1,3]-DD.table[3,3]) - (DD.table[2,3] - DD.table[4,3])
+DD1
+DD1==DD2
+```
+
+The first model is saved as "DD1", and the second model as "DD2". By setting both results equal to each other we can see, and therewith prove succesfully, that both methods lead to the same results. The difference of the two differences can be interpretated as the treatment effect and is therewith similar to Beta3 of our following regression model. 
+As a result, we receive 4,3% which can be interpreted as the treatment effect of the SCHIP program. But we will go deeper in the interpretation in 4c).
+
+b) Then run a simple difference-indifferences regression model in order to obtain the same estimator as with the table. 
+```{r, warning=FALSE}
+lm3 <- lm(insured ~ implement*under19, data = dt.insurance)
+stargazer(lm3, type = "text", no.space = TRUE, column.sep.width = "1pt", omit.stat = c("f", "ser"))
+```
+
+c) Interpret all the coefficients in the model. How did the SCHIP policy affect insurance enrollment?
+Constant: The constant describes the percentage of insured people that are above 18 during the early time period. On a 1% significance level, 70.7% of  that people (control group) are on average insured.
+Beta1: This variable is not significant.
+Beta2: Beta2 describes the difference in insured people between the two age groups. On a 1% significance level, people under 19 are on average 10.8% more insured than people above 18. 
+Beta3: Beta three is the interaction term, and explains therefore the treamtent effect of the SCHIP program on the insurance rate of people under 19. On a 1% significance level, the insurance rate of people who are under 19 increases from the time period before to after the implementation by 4,3%. 
+
+
+Control group
+Before 2000:
+B0: On a 1% significance level, 70.7% of that people (control group) are on average insured.
+```{r}
+coefficients(lm3)[1]
+```
+After 1999:
+B0 + B1: On a 1% significance level, 70.6% of that people (control group) are on average insured.
+```{r}
+coefficients(lm3)[1] + coefficients(lm3)[2]
+```
+
+Treatment group
+Before 2000: On a 1% significance level, 81.5% of our treatment group are on average insured. 
+B0+B2:
+```{r}
+coefficients(lm3)[1] + coefficients(lm3)[3]
+```
+After 1999: On a 1% significance level, 85,7% of our treatment group are on average insured. 
+B0+B1+B2+B3:
+```{r}
+coefficients(lm3)[1] + coefficients(lm3)[2] + coefficients(lm3)[3] + coefficients(lm3)[4]
+```
+
+
+##Question 5)
+a) Add the variable povratio and its square. 
+```{r, warning=FALSE}
+lm4 <- lm(insured ~ implement*under19+ povratio + I(povratio^2), data = dt.insurance)
+stargazer(lm3,lm4, type = "text", no.space = TRUE, omit.stat = c("f","ser"))
+```
+
+b) Comment on what happens to the effect of the program. Use the omitted variable bias formula to tell a consistent story of what could be going on.
+If we include the variable povratio and povratio^2 into the model, we can see that all variables in lm4 are highly significant on a 1% level. This is different to our previous model, where beta1 was not significant. We also see that beta3(interaction term)  decreases from lm3 to lm4. This effects can be assigned to the the missing variable bias, since we can assume that the variable povratio is correlated to other independent variables. We therefore violate OLS assumption 4. For instant, the poverty ratio is probably correlated with the our variable under19, since people under 19 usually dont contribute to the family income, which determines the poverty ratio. The omitted variable bias effects the values of our coefficients, thats why its significance to correct the bias. 
+
+To better examine the effect, we will apply the ommitted variable formula on model lm5.
+$$\hat\beta=\tilde\beta + bias$$
+
+We will determine the sign of the bias by taking into account the sign of the coefficient of the omitted variable as well as the sign of the correlation between the omitted variable and the interaction term.
+The sign of beta3(Interaction term) is positive. For the correlation between the interaction term and the omitted variable povratio we assume a positive sign as well. We do this because we expect that the poverty ratio, and therewith the wealth of the families, will increase for poeple under 19 from the period before to the period after. Since the SCHIP program aims to support young individuals with a low income, families or individuals will have to pay less money on insureance rates, therefore their family income will remain higher without these expenses. Both, a higher family income or a smaller low-income-cutoff will increase the poverty ratio, which is a indicator for the financial power of a given individual. 
+Taking both signs into account we can conclude that the bias is positive and the coefficient is overestimated. A positive bias is confirmed by the stargazer output of 5)a). Beta3 of lm3 is 4,3% whereas beta three of lm5 is only 3,2%. We can assign this overestimation of beta3 of about 1 pp to the omitted variabel bias. 
+```{r}
+dt.insurance[, cor((under19*implement),povratio)]
+```
+
+
+# Question 6
+```{r, warning=FALSE}
+lm5 <- lm(insured ~ under19*factor(year), data = dt.insurance)
+summary(lm5)
+```
+Analysing the outcome of the summary statistics of lm5, the intercept has a value of 0.7177 with a 1% significance. That means, that setting all other variables equal to zero, the average insurance rate of individuals above 18 in the base year 1991 is 71.77%. 
+On a 5% significance level, individuals below an age of 19 are on average 10.11% more likely to be insured than individuals above 18, ceteris paribus.
+Furthermore, we can see that the interaction term of under19 and the factor year is not significant until 1998. From 2001 onwards, the interaction term remains highly significant at the 1% level. This can be explained by the SCHIP program, as it was implemented between 1997 and 1999. The significance is increasing from 1998 to 2001 because we can assume that the program was not implemented in every state exactly at the same time and in generall, it probably needed time until the people were aware of the program.
+
+```{r, warning=FALSE}
+dt.plot <- data.table(
+  dummies = coef (lm5)[20:length(coef(lm5))]
+  , x = 1992:2008
+  , lb = confint(lm5, level = 0.9)[20:length(coef(lm5)), 1]
+  , ub = confint(lm5, level = 0.9)[20:length(coef(lm5)), 2])
+
+qplot( data = dt.plot
+       , y = dummies
+       , x = x
+       , geom = "line"
+       , main="Development of the treatment effect from 1991 to 2008") + 
+  theme_bw() + 
+  xlab("year") + ylab("Beta") + 
+  geom_vline(xintercept=2000, col="blue", linetype="dotted") + 
+  geom_hline(yintercept=0, col="red", linetype="dashed") + 
+  geom_errorbar( aes(x = x, ymin=lb, ymax =ub), width=0.1)
+```
+In the graph we can see the development of the treatment effect from 1991 to 2008 on a 90% confidence interval. Whenever the confidence model intersects with the vertical red line (that is at 0), we can conclude that the interaction term is not significant. As already seen in the table above, from 1998 onwards the interaction term gets significant and remains on a constant level from 2003 onwards. 
+
+## Question 7
+a) For each family, the outcome variable insured is binary. Repeat the analysis in question 5 using logistic regression and calculate the average partial effect of treatment on insurance enrollment. 
+```{r}
+min(predict(lm4))
+max(predict(lm4))
+qplot(predict(lm4), geom = 'histogram', binwidth= 0.01) + geom_vline(xintercept = 0, col = 'Red', linetype = 2) + geom_vline(xintercept = 1, col = 'Red', linetype = 2) + labs(x = 'Probability of being insured', y = 'Number of People') + theme_bw()
+qplot(x = predict(lm4), y = residuals(lm4), geom = 'point') + theme_bw()
+```
+
+```{r, message=FALSE}
+model1 <- insured ~ (implement)*under19 + povratio + I(povratio^2)
+out.ols1 <- lm(model1, data = dt.insurance)
+out.logit1 <- glm(model1, data = dt.insurance, family = binomial(link = 'logit'))
+
+qplot(predict(out.ols1, type = 'response'), geom= 'histogram') + theme_bw()
+
+stargazer(lm4, out.logit1, type = "text", no.space = TRUE)
+```
+
+b) Do the same for the average partial effect of povratio. Compare these results with what you got in question 5. 
+The problem here is that we can not compare the betas with the ols-coefficients, since the logit model is more sophisticated.
+
+To interpret the variables correctly we can apply the Average Partial Effect model. Using the APE method, we first compute n partial effects for every observations, and then computing the average of the partial effects.
+But we can use the logitmfx-function only for (quasi-)continuous variables (e.g. povratio and povratio^2. For discrete variables (e.g. implement, under19) we have to compute the partial effect e.g. for <19 and >=19 using the following formula:
+$$G(beta_0+ beta_{under19}*1+...+beta_n*x_n)-G(beta_0+ beta_{under19}*0+...+beta_n*x_n)$$ 
+```{r}
+logitmfx(out.logit1, data = dt.insurance, atmean = FALSE)
+```
+
+Interpretation for interaction term:
+The interaction term indicates the average partial effect of treatment on insurance enrollments. We can analyze it by observing the function logitmfx. So, holding all variables constant, individuals aged below 19 will on average increase their insurance by a likelyhood of 4.07% comparing the two time periods before the implementation and after the implementation. 
+
+For the discrete variables under19 and implement, we will use the manual approach to calculate their effects on the model.
+The effect of increasing the variable implement from 0 to 1, meaning that we observe the difference between the periods before and after the implementation, is calculated below. Holding all other variables constant, changing the period from before to after the implementation, the average amount of insured people will decrease by -0.81%.
+```{r}
+dt.insurance[,povratio_sqr := povratio^2]
+dt.insurance[,interaction_term := implement*under19]
+coeffs.logit1 <- as.matrix(coef(out.logit1))
+
+implement0 <- as.matrix(dt.insurance[, list(const=1, implement=0, under19, povratio, povratio_sqr, interaction_term)]) 
+implement1 <- as.matrix(dt.insurance[, list(const=1, implement=1, under19, povratio, povratio_sqr, interaction_term)]) 
+
+APE_substract1 <- plogis(implement1 %*% coeffs.logit1) - plogis(implement0 %*% coeffs.logit1)
+mean(APE_substract1)
+```
+Looking at the partial effect from changing under19 from 0 to 1, meaning that we compare people above 18 with people under 19, we can conclude that people under 19 are on average 9,51% more insured than people above, holding all other variables constant.
+```{r}
+under19_0 <- as.matrix(dt.insurance[, list(const=1, implement, under19=0, povratio, povratio_sqr, interaction_term)]) 
+under19_1 <- as.matrix(dt.insurance[, list(const=1, implement, under19=1, povratio, povratio_sqr, interaction_term)]) 
+
+APE_substract2 <- plogis(under19_1 %*% coeffs.logit1) - plogis(under19_0 %*% coeffs.logit1)
+mean(APE_substract2)
+```
+
+The interpretation for the impact of povratio is different since we have its linear value and its squared. Therefore, for the same x effecting the dependant variable, we have two different partial effects. As we cannot run that automatically in R we have to calculate the derivatives manually first. This will provide us with two seperate effects of the variables, which we will eventually combine by applying the derivative function. Finally, this will lead us to the overall APE of povratio and its effect on insurance ratio.
+```{r}
+#Getting xb
+dt.APE.povratio <- as.matrix(dt.insurance[, list(const=1, implement, under19, interaction_term, povratio, povratio_sqr)])
+head(dt.APE.povratio)
+```
+```{r}
+#Multiplying to get the values for x*b
+multiplication <- dt.APE.povratio %*% coeffs.logit1 
+head(multiplication)
+```
+```{r}
+#Getting G(xb)
+dlogis <- dlogis(multiplication)
+head(dlogis)
+```
+```{r}
+#Getting average partial effect of povratio + povratio^2
+mean(dlogis*(coeffs.logit1[4]+2*coeffs.logit1[5]*dt.insurance$povratio))
+```
+We can conclude, that the combine impact of povration and its squared have a positive impact. This means that with increasing povratio, the likehood of insurance take-up increases on average by 4.18%.
+
+
+
+##Question 8
+In order to test if SCHIP laws crowd out private insurance enrollment, we decided to include 2 more variables in our model. We base our choice on highest correlated variables with insured; these are student (is student) and withparent (lives with parents). 
+```{r}
+lm6 <- lm(privhi ~ implement*under19 + povratio + I(povratio^2) + student + withparent, data = dt.insurance)
+stargazer(lm6, type = "text", no.space = TRUE, column.sep.width = "1pt", omit.stat = c("f", "ser"))
+```
+The constant (b0) is the average over privately insured people holding all other variables constant. This amounts The average is 27.5% of people. This is significant at a 1% level.
+As you consider the after SCHIP implementation period, the likelihood of a 1 for privhi decreases by 2.2 point percentage, ceteris paribus. It is significant at a 1% level. 
+As you consider indivudals aged under 19, the likelihood of a 1 for privhi decreases by 1.1 point percentage, ceteris paribus. It is significant at a 1% level. 
+Looking at the povratio coefficient, we can see that as we increase it by 1 unit, its effect will be positive on privhi. However, looking at its squared coefficient, and considering the derivative, we can say that eventually the effect of povratio will decrease after it reaches its maximum (15.5), ceteris paribus. Both povratio, and its square, are significant at a 1% level.
+As you consider that the individual is a student, the likelihood of a 1 for privhi increases by 16.6 point percentage, ceteris paribus. It is significant at a 1% level. 
+As you consider that the individual lives with his/her parents, the likelihood of a 1 for privhi increases by 5.6 point percentage, ceteris paribus. It is significant at a 1% level. 
+As you consider the interaction term of the after SCHIP implementation period and the under 19 age restriction, the likelihood of a 1 for privhi increases by 0.02 point percentage, ceteris paribus. However, this is not statistically significant, and thus is not different from 0. This is the interpretation for the treatment effect. 
+
+In order to investigate the crowding out of private health insurance as a result of the SCHIP laws, we need to also look at the models in terms of public health insurance.
+
+```{r}
+lm7 <- lm(pubhi ~ implement*under19 + povratio + I(povratio^2) + student + withparent, data = dt.insurance)
+lm8 <- lm(insured ~ implement*under19 + povratio + I(povratio^2) + student + withparent, data = dt.insurance)
+stargazer(lm6, lm7, lm8, type = "text", no.space = TRUE, column.sep.width = "1pt", omit.stat = c("f", "ser"))
+```
+
+From the third model (insured), our results suggest a statistically significant (at the 1%), 3.7 percentage point increase in insurance coverage for under 19 and after the implementation of SCHIP laws. 
+From the second model (pubhi), our results suggest a statistically significant (at the 1%), 4.6 percentage point increase in insurance coverage for under 19 and after the implementation of SCHIP laws.
+For the first model, as previously discussed, the treatment effect is statistically insifnicant and suggests a 0.02 percentage point increase. 
+
+In order to calculate the potential crowding out of private health insurance, we can divide the treatment effect on private health insurance (privhi) by the treatment effect on public health insurance (pubhi). Thus, 0.002/0.046 gives us 4.3%. However, as the treatment effect for privhi is not significant, neither is this calculation, meaning it is not statistically different from zero. Hence, we cannot say that the SCHIP laws "crowded out" private health insurance enrollment.
+
+
+##Question 9)
+For this homework, the data used is extracted from the March Current Population Survey (CPS). The CPS is a monthly survey of about 50,000 households (sample size may vary over time) conducted by the Bureau of Labor Statistics. Each month, data about employment status and demographic characteristics is obtained from individuals aged 16 and older. 
+However, and according to the author, there are long-standing concerns while using this type of data: "responders may provide their current insurance status when asked about their prior year status. Therefore, those insurance variables are potentially measured with error." (Katherine Swartz, 1986). 
+We assume therefore, that we have a measurement error in our data. The measurement error is defined as the difference between the observed value and the actual value. In this case, we have a measurement error on the dependent variable (insured) because respondents tend to provide their current insurance status instead of the insurance status from the previous year. A measurement error on the independent variable is a non-systmeatic error since the OLS estimators are unbiased and consistent. This type of error is harmless compared to a measurement error in the independent variable. 
+Also, it is unlikely that our results will be affected by this problem due to the quasi-experimental nature of our identification strategy. A quasi-experiment happens when an exogenous event - in this case, the implement of SCHIP - changes the something in the environment. It generates such variation and then relies on this one source alone. This nature always has a control group (individuals aged above 19) and a treatment group (individuals aged under 19). All before and after SCHIP years are grouped together so these errors are likely to generate small number of mistakes.
+
+ 
+##Question 10)
+a) What would be the problem if richer states implemented the policy sooner than other states? How could you account for this in your regression models?
+
+The issue with richer states implementing the SCHIP program sooner than other states, would be that the true effect of the policy implementation for the country as a whole becomes harder to measure. This is because the implementation period spans 3 years; 1997 to 1999. The prblem with this is that for any of these years, if you were to run a regression analysis, you would be considering data of states that have implemented and data of states that have not yet implemented the SCHIP laws, and labeling it altogether as is it were not implemented yet. 
+
+Keeping in mind that the SCHIP program targets low income families in particular, providing health care coverage for kids aged under 19, there is another potential issue to consider when the richer states implement the SCHIP program sooner than other stats. It could mean that the treatment effect will not be as large or significant as it would be in states where such laws can really make a difference in terms of overall insurance enrollment. 
+
+In short, there is inter-state and intra-state variation and there maybe some time constants in the error term which are not yet taken into consideration.
+
+You could account for this in the regression by factoring the states so that rather than considering the data on a national aggregated level, you could consider each state individually; considering panel data. You would have too look at the fixed effect model, which will allow you to remove any time constant error.
+
+
+##Question 11)
+```{r , warning = FALSE, tidy = TRUE}
+dt.data_under19 <- dt.insurance[age <19]
+```
+a) create the panel data with our dependent variable (fraction of respondents bellow 19 and that are insured), with family_income variable, with umemployment_rate variable and with an indicator for when the states implement the policy (implement), ordering it by state and year. 
+```{r , warning = FALSE, tidy = TRUE}
+dt.panel <- dt.data_under19[,list(mean(insured), mean(family_income), mean(unemployment_rate)), by = list(state,year)]
+dt.panel <- dt.panel[order(state,year)]
+dt.panel[, implement := ifelse( year >= 2000, 1, 0)]
+```
+
+b) we can create a state- and year-varying indicator for eligibility at age 19 that captures the fact that some states increased their upper age limit to this level at different points in time. Then, add this variable to our panel data.
+```{r}
+dt.panel[state == "Georgia"|state=="Hawaii"|state=="Maine"|state=="Delaware"|state=="New Hampshire"|state=="Virginia"|state=="Washington"|state=="West Virginia", elig1995:=ifelse(year>=1995,1,0)]
+dt.panel[state == "Florida"|state=="Indiana"|state=="Oregon"|state=="Kentucky"|state=="New Mexico"|state=="Rhode Island"|state=="South Dakota", elig1997:=ifelse(year>=1997,1,0)]
+dt.panel[state == "Alabama"|state=="Alaska"|state=="Arizona"|state=="Arkansas"|state=="California"|state=="Colorado"|state=="Connecticut"|state=="District of Columbia"|state=="Idaho"|state=="Illinois"|state=="Iowa"|state=="Kansas"|state=="Lousiana"|state=="Maryland"|state=="Massachusetts"|state=="Michigan"|state=="Minnesota"|state=="Mississipi"|state=="Missouri"|state=="Montana"|state=="Nebraska"|state=="Nevada"|state=="New Jersey"|state=="New York"|state=="North Carolina"|state=="North Dakota"|state=="Ohio"|state=="Oklahoma"|state=="Pennsylvania"|state=="South Carolina"|state=="Tennessee"|state=="Texas"|state=="Utah"|state=="Vermont"|state=="Wisconsin"|state=="Wyoming", elig1999:=ifelse(year>=1999,1,0)]
+dt.panel[is.na(dt.panel)]<-0
+dt.panel<- dt.panel[order(state,year)]
+dt.panel
+```
+
+```{r}
+dt.panel[,table(implement, year)] 
+qplot(data=dt.panel, x=V1, geom="histogram")
+```
+
+The histogram above confirms that the Y (fraction of respondents below age 19 in each state and each year that were insured) distribution is left skewed, indicating that the meadian > mean. 
+
+```{r}
+qplot(data=dt.panel, x=year, y=V1, geom="point") + theme_bw() + theme(legend.position = "bottom") + stat_smooth() + labs(x="year", y="fraction", col="treatment effect")
+```
+Through the above graph, we get the evolution of the dependent variable over time. Seems like there is an increase of this fraction through time (from 1992 to 2008).
+
+How do you suggest we should use this new dataset to study the impact of SCHIP policy on insurance take-up? Implement your suggestion.
+
+
+$$V1_{it} = \theta_t + \beta_1Implement_{it} + a_i + \mu_{it}$$
+With the creation of the panel data, it allow us to get rid of some part of the error term - ai variable. Ai represents all variables that are constant over the time periods that we observed. We assume that both family_income and unemployment_rate are time constant or at least don?t change significantlly over this time period. Both variables are also correlated with the independent variable (implement variable). For instance, we make the assumption that after SCHIP implement, families would have more income left since they would have to pay less money for insurance. 
+In order to correct this, we need to remove all time constant variables, by apllying 1 of the following 3 models. 
+We opt to exclude the Pooled OLS estimator, since the Fixed-Effect give us the same values but in a faster and less complex way. 
+
+First Solution: First-Difference:
+While applying the First Difference method, we calculate the difference for 2 different time periods and therefore remove the time constant effect. 
+```{r, message=FALSE}
+lm_dif <- plm(V1 ~ 0 + implement + elig1995 + elig1997 + elig1999, data=dt.panel
+            , index = c("state", "year")
+            , model = "fd")
+stargazer(lm_dif, type="text", no.space = TRUE, omit.stat = c("f", "ser"))
+```
+The dependent variable in this equation is the fraction of responders who are both under 19 and insured in each state from year t-1 to t. 
+```{r}
+coefficients(lm_dif)[1]
+```
+The estimate of the treatment effect is 0.007, but has no significance. 
+
+Second Solution: Fixed Effects
+An alternative way to eliminate the effect of time constant variables is to do the Fixed Effect estimator. This model substracts from every variable its mean at the state level, since the intercept of time constant variable is related to the state, not with the year. 
+```{r}
+lm_fix <- plm(V1 ~ implement + elig1995 + elig1997 + elig1999, data=dt.panel
+            , index = c("state", "year")
+            , model = "within")
+stargazer(lm_fix, type="text", no.space = TRUE,omit.stat = c("f", "ser"))
+```
+
+```{r}
+coefficients(lm_fix)[1]
+```
+B1 is 0.034 and significant at the 1% level. On average, people w
+It seems like the Treatment Effect, which is the difference of the fraction of the responders who are under 19 and insured, increases on average  by about 3.4%. 
+
+We can conclude that the first differences estimator and the fixed-effects estimator are different. However, this happen because we have more than two time periods. Therefore, we are going to choose the Fixed-Effect estimator because it is more efficient for more than 2 time periods.
+
+## Question 12)
+a) Are the error terms in your previous model serially correlated? 
+Serial correlation appears always then, when the residuals are correlated over time:
+$(y-yhat)$
+In order to test for serially correlation, we need to calculate if there is significant corrlelation between the time dependent error term in t and in t-1. 
+```{r, message=FALSE}
+out.insurance <- lm_fix
+u <- residuals(out.insurance)
+dt.panel[year!=1991, u:= u]
+out.u <- plm(u~lag(u,1)
+             , data = dt.panel
+             , index = c("state","year")
+             , model = "within")
+stargazer(out.u,type = "text", no.space = TRUE, omit.stat = c("f","ser"))
+```
+
+As we can see, the lag(u,1) is above zero, but it is not significant. We can therefore conclude, that we do not have serial correlation in our data set.
+
+b) What could be the consequences if they were? 
+A serial correlation leads to a biased model, that has some major limitations. It influences the t-statistics and therefore the calculated standard errors. We can either have positive or negative serial correlation, but they will be further explained in part c).
+
+c) How would your regression coefficients be accected? 
+There are two different ways regression coefficients can be affected. In both cases, the correlation has to be significant. 
+First, we can have a positive serial correlation, which will would lead to a underestimation of the standard error. The t-statistics are vice versa overestimated. In conclusion, having a positive serial correlation tends us to interpret the coefficients as significant, even if they are not. We therefore have to be very careful with the interpretation, when we have a positive serial correlation.
+Second, a negative serial correlation leads us to overestimate the standard errors, which will lead us to conclude, that the significance is lower than it actually is. In general, negative serial correlation is less serious, however if it is significant and smaller than -0.2, or bigger than 0, we have to take the bias into account, and correct for it.
+
+d) What could be done about it?
+In order to eliminate the error, and therefore correct the biased standard errors, we have to apply the HC3 model in R. In general, one should only apply the HC3 model if the model is biased, since it could change data that was not biased in a negative way. While applying the HC3 model, we are correcting for both, heteroskedaticity and serial correlation. 
